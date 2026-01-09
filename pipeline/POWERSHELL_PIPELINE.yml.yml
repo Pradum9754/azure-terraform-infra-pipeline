@@ -1,0 +1,28 @@
+name: GRAVITAS-ENTERPRISE-PIPELINE-1
+
+trigger: none
+
+pool: infra-agent
+
+steps: 
+- task: PowerShell@2
+  displayName: AZ LOGIN
+  inputs:
+    targetType: 'inline'
+    script: "az login --service-principal --username 50f38b16-eb65-4401-b208-e65256b46071 --password z018Q~gPcMLNKD-~yMtplvK03zENchq~FIRYcaMW --tenant f25bfa1f-572b-4c18-b0fd-441eef6beb87"
+- task: PowerShell@2
+  displayName: TERRAFORM INIT+FMT+VALIDATE
+  inputs:
+    targetType: 'inline'
+    script: |
+      cd environments/dev
+      terraform init
+      terraform fmt
+      terraform validate
+- task: PowerShell@2
+  displayName: TERRAFORM PLAN
+  inputs:
+    targetType: 'inline'
+    script: |
+      cd environments/dev
+      terraform plan

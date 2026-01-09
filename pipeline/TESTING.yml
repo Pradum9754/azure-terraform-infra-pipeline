@@ -1,0 +1,23 @@
+name: GRAVITAS-ENTERPRISE-PIPELINE
+
+trigger: none
+
+pool: infra-agent
+
+steps: 
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    script: 'Write-Host "terraform init"'
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    script: 'Write-Host "terraform fmt"'
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    script: 'Write-Host "terraform validate"'
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    script: 'Write-Host "terraform plan"'

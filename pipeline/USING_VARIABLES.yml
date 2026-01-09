@@ -1,0 +1,188 @@
+name: GRAVITAS-ENTERPRISE-AZURE-TERRAFORM-CICD
+trigger:
+  branches: 
+    include: 
+    - main
+  paths: 
+    include: 
+    - environments/dev or prod
+
+pool: infra-agent
+
+# variables: 
+#   TERRAFORMWORKINGDIR: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+# OR
+
+variables: 
+- group: stages-pipeline
+- name: STORAGE_ACCOUNT_NAME
+  value: 'devstorage12'
+  
+  
+# parameters:
+# - name: 
+#   displayName: 
+#   type: 
+#   default: 
+#   values: 
+
+# ============================================================
+# STAGE 1: TERRAFORM BUILD & PLAN
+# ============================================================
+stages:
+- stage: Terraform_BuildPlan
+  displayName: 'Terraform | Build & Plan'
+  jobs:
+    - job: Terraform_InitValidatePlanShow
+      displayName: 'Terraform | Init • Validate • Plan • Show'
+      pool: infra-agent
+      steps:
+        - task: TerraformTask@5
+          displayName: 'Terraform Init (Remote Backend)'
+          inputs:
+            provider: 'azurerm'
+            command: 'init'
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+            backendServiceArm: '$(SERVICE_CONNECTION)'
+            backendAzureRmStorageAccountName: '$(STORAGE_ACCOUNT_NAME)'
+            backendAzureRmContainerName: 'devcontainer'
+            backendAzureRmKey: 'dev.terraform.tfstate'
+
+        - task: TerraformTask@5
+          displayName: 'Terraform Validate'
+          inputs:
+            provider: 'azurerm'
+            command: 'validate'
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+
+        - task: TerraformTask@5
+          displayName: 'Terraform Plan'
+          inputs:
+            provider: 'azurerm'
+            command: 'plan'
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+            environmentServiceNameAzureRM: '$(SERVICE_CONNECTION)'
+
+        - task: TerraformTask@5
+          displayName: 'Terraform Show'
+          inputs:
+            provider: 'azurerm'
+            command: 'show'
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+            outputTo: 'console'
+            outputFormat: 'default'
+            environmentServiceNameAzureRM: '$(SERVICE_CONNECTION)'
+
+# ============================================================
+# STAGE 2: SECURITY & COMPLIANCE
+# ============================================================
+- stage: Security_Compliance
+  displayName: 'Security & Compliance | TFSEC • TFLINT • Checkov'
+  dependsOn: Terraform_BuildPlan
+  jobs:
+    - job: Security_TFSEC
+      displayName: 'TFSEC Security Scan'
+      pool: infra-agent
+      steps:
+        - task: tfsec@1
+          inputs:
+            version: 'v1.26.0'
+            dir: '$(TERRAFORMWORKINGDIR)'
+
+    - job: CodeQuality_TFLINT
+      displayName: 'TFLINT Code Quality'
+      pool: infra-agent
+      continueOnError: true
+      steps:
+        - task: PowerShell@2
+          displayName: 'Run TFLINT'
+          inputs:
+            targetType: 'inline'
+            script: |
+              winget install terraformLinters.tflint --accept-source-agreements --accept-package-agreements
+              tflint --force
+              ls
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+
+    - job: Policy_Checkov
+      displayName: 'Checkov Compliance Scan'
+      pool: infra-agent
+      steps:
+        - task: PowerShell@2
+          displayName: 'Run Checkov'
+          inputs:
+            targetType: 'inline'
+            script: |
+              checkov -d . --enable-secret-scan-all-files
+              checkov -d . --soft-fail
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+
+# ============================================================
+# STAGE 3: COST ANALYSIS
+# ============================================================
+- stage: CostAnalysis_Infracost
+  displayName: 'Cost Analysis | Infracost'
+  dependsOn: Security_Compliance
+  jobs:
+    - job: Infracost
+      displayName: 'Infracost Forecast & Analysis'
+      pool: infra-agent
+      steps:
+        - task: PowerShell@2
+          displayName: 'Run Infracost'
+          inputs:
+            targetType: 'inline'
+            script: 'infracost breakdown --path=.'
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+
+# ============================================================
+# STAGE 4: MANUAL GOVERNANCE APPROVAL
+# ============================================================
+- stage: Governance_ManualApproval
+  displayName: 'Governance | Manual Approval'
+  dependsOn: CostAnalysis_Infracost
+  jobs:
+    - job: ManualApproval
+      displayName: 'Await Governance Approval'
+      pool: server
+      timeoutInMinutes: 2
+      steps:
+        - task: ManualValidation@1
+          displayName: 'Manual Approval'
+          inputs:
+            notifyUsers: 'pradum.dev@outlook.com'
+            instructions: 'Please review Terraform plan, security and compliance reports.'
+            onTimeout: 'resume'
+
+# ============================================================
+# STAGE 5: TERRAFORM APPLY (DEPLOYMENT)
+# ============================================================
+- stage: Terraform_Deploy
+  displayName: 'Terraform | Apply Deployment'
+  dependsOn: Governance_ManualApproval
+  jobs:
+    - job: Terraform_Apply
+      displayName: 'Terraform Apply Deployment'
+      condition: succeededOrFailed()
+      pool: infra-agent
+      steps:
+        - task: TerraformTask@5
+          displayName: 'Terraform Init (Apply)'
+          inputs:
+            provider: 'azurerm'
+            command: 'init'
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+            backendServiceArm: '$(SERVICE_CONNECTION)'
+            backendAzureRmStorageAccountName: '$(STORAGE_ACCOUNT_NAME)'
+            backendAzureRmContainerName: 'devcontainer'
+            backendAzureRmKey: 'dev.terraform.tfstate'
+
+        - task: TerraformTask@5
+          displayName: 'Terraform Apply'
+          inputs:
+            provider: 'azurerm'
+            command: 'apply'
+            workingDirectory: '$(TERRAFORMWORKINGDIR)'
+            commandOptions: '-auto-approve'
+            environmentServiceNameAzureRM: '$(SERVICE_CONNECTION)'

@@ -1,0 +1,31 @@
+name: GRAVITAS-ENTERPRISE-PIPELINE-1
+
+trigger: none
+
+pool: infra-agent
+
+steps: 
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'gravitas-connection'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: 'az group list'
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'gravitas-connection'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      cd environments/dev
+      terraform init
+      terraform fmt
+      terraform validate
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'gravitas-connection'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      cd environments/dev
+      terraform plan

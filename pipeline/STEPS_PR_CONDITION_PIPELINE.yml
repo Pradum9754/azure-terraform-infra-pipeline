@@ -1,0 +1,49 @@
+name: GRAVITAS-ENTERPRISE-PIPELINE-1
+
+trigger: 
+- feature/*
+- main
+
+pool: infra-agent
+
+steps: 
+- task: TerraformTask@5
+  displayName: TERRAFORM INIT
+  inputs:
+    provider: 'azurerm'
+    command: 'init'
+    workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+    backendServiceArm: 'federated-con-1'
+    backendAzureRmStorageAccountName: 'devstorage12'
+    backendAzureRmContainerName: 'devcontainer'
+    backendAzureRmKey: 'dev.tfstate'
+- task: TerraformTask@5
+  displayName: TERRAFORM VALIDATE
+  inputs:
+    provider: 'azurerm'
+    command: 'validate'
+    workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+- task: TerraformTask@5
+  displayName: TERRAFORM PLAN
+  inputs:
+    provider: 'azurerm'
+    command: 'plan'
+    workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+    environmentServiceNameAzureRM: 'federated-con-1'
+- task: TerraformTask@5
+  displayName: TERRAFORM SHOW
+  inputs:
+    provider: 'azurerm'
+    command: 'show'
+    workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+    outputTo: 'console'
+    outputFormat: 'default'
+    environmentServiceNameAzureRM: 'federated-con-1'
+- task: TerraformTask@5
+  displayName: TERRAFORM APPLY
+  condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+  inputs:
+    provider: 'azurerm'
+    command: 'apply'
+    workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+    environmentServiceNameAzureRM: 'federated-con-1'

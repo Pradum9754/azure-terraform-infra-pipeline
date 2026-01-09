@@ -1,0 +1,168 @@
+name: GRAVITAS-ENTERPRISE-AZURE-TERRAFORM-CICD
+
+pool: infra-agent
+trigger: none
+
+parameters:
+- name: env
+  displayName: Select Environment
+  type: string
+  default: dev
+  values:
+    - dev
+    - prod
+
+variables:
+- group: stages-pipeline
+- name: STORAGE_ACCOUNT_NAME
+  value: 'devstorage12'
+- name: TERRAFORMWORKINGDIR
+  value: '$(System.DefaultWorkingDirectory)/environments/${{ parameters.env }}'
+
+# ============================================================
+# STAGE 1: TERRAFORM BUILD & PLAN
+# ============================================================
+stages:
+- stage: Terraform_BuildPlan
+  displayName: 'Terraform | Build & Plan'
+  jobs:
+  - job: Terraform_InitValidatePlan
+    displayName: 'Terraform Init • Validate • Plan'
+    steps:
+    - task: TerraformTask@5
+      displayName: 'Terraform Init'
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+        backendServiceArm: $(SERVICE_CONNECTION)
+        backendAzureRmStorageAccountName: $(STORAGE_ACCOUNT_NAME)
+        backendAzureRmContainerName: '${{ parameters.env }}container'
+        backendAzureRmKey: '${{ parameters.env }}.terraform.tfstate'
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Validate'
+      inputs:
+        provider: azurerm
+        command: validate
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Plan'
+      inputs:
+        provider: azurerm
+        command: plan
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+        commandOptions: '-out=tfplan'
+        environmentServiceNameAzureRM: $(SERVICE_CONNECTION)
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Show'
+      inputs:
+        provider: azurerm
+        command: show
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+        commandOptions: 'tfplan'
+        environmentServiceNameAzureRM: $(SERVICE_CONNECTION)
+
+# ============================================================
+# STAGE 2: SECURITY & COMPLIANCE
+# ============================================================
+- stage: Security_Compliance
+  displayName: 'Security & Compliance'
+  dependsOn: Terraform_BuildPlan
+  jobs:
+
+  - job: TFSEC
+    displayName: 'TFSEC Scan'
+    steps:
+    - task: tfsec@1
+      inputs:
+        version: 'v1.26.0'
+        dir: $(TERRAFORMWORKINGDIR)
+
+  - job: TFLINT
+    displayName: 'TFLINT Scan'
+    continueOnError: true
+    steps:
+    - task: PowerShell@2
+      inputs:
+        targetType: inline
+        script: |
+          tflint --init
+          tflint --force
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+
+  - job: Checkov
+    displayName: 'Checkov Compliance'
+    steps:
+    - task: PowerShell@2
+      inputs:
+        targetType: inline
+        script: |
+          checkov -d . --enable-secret-scan-all-files --soft-fail
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+
+# ============================================================
+# STAGE 3: COST ANALYSIS
+# ============================================================
+- stage: CostAnalysis_Infracost
+  displayName: 'Cost Analysis | Infracost'
+  dependsOn: Security_Compliance
+  jobs:
+  - job: Infracost
+    displayName: 'Infracost Breakdown'
+    steps:
+    - task: PowerShell@2
+      inputs:
+        targetType: inline
+        script: |
+          infracost breakdown --path=.
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+
+# ============================================================
+# STAGE 4: MANUAL GOVERNANCE APPROVAL
+# ============================================================
+- stage: Governance_ManualApproval
+  displayName: 'Governance Approval'
+  dependsOn: CostAnalysis_Infracost
+  jobs:
+  - job: ManualApproval
+    pool: server
+    steps:
+    - task: ManualValidation@1
+      inputs:
+        notifyUsers: 'pradum.dev@outlook.com'
+        instructions: 'Review Terraform plan, security & cost analysis before approval.'
+        onTimeout: reject
+
+# ============================================================
+# STAGE 5: TERRAFORM APPLY
+# ============================================================
+- stage: Terraform_Deploy
+  displayName: 'Terraform Apply'
+  dependsOn: Governance_ManualApproval
+  condition: succeeded()
+  jobs:
+  - job: Terraform_Apply
+    displayName: 'Terraform Apply'
+    steps:
+    - task: TerraformTask@5
+      displayName: 'Terraform Init (Apply)'
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+        backendServiceArm: $(SERVICE_CONNECTION)
+        backendAzureRmStorageAccountName: $(STORAGE_ACCOUNT_NAME)
+        backendAzureRmContainerName: '${{ parameters.env }}container'
+        backendAzureRmKey: '${{ parameters.env }}.terraform.tfstate'
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Apply'
+      inputs:
+        provider: azurerm
+        command: apply
+        workingDirectory: $(TERRAFORMWORKINGDIR)
+        commandOptions: '-auto-approve'
+        environmentServiceNameAzureRM: $(SERVICE_CONNECTION)

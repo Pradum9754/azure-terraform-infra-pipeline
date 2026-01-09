@@ -1,0 +1,153 @@
+name: GRAVITAS-AZURE-TERRAFORM-ENTERPRISE-CICD
+
+trigger:
+  - feature/*
+  - main
+
+pool: infra-agent
+
+jobs:
+
+  # ============================================================
+  # STAGE 1: TERRAFORM BUILD & PLAN
+  # ============================================================
+  - job: Terraform_Build_and_Plan
+    displayName: 'Terraform | Init • Validate • Plan • Show'
+    pool: infra-agent
+    steps:
+      - task: TerraformTask@5
+        displayName: 'Terraform Init (Remote Backend)'
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+          backendServiceArm: 'federated-con-1'
+          backendAzureRmStorageAccountName: 'devstorage12'
+          backendAzureRmContainerName: 'devcontainer'
+          backendAzureRmKey: 'dev.terraform.tfstate'
+
+      - task: TerraformTask@5
+        displayName: 'Terraform Validate'
+        inputs:
+          provider: 'azurerm'
+          command: 'validate'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+      - task: TerraformTask@5
+        displayName: 'Terraform Plan'
+        inputs:
+          provider: 'azurerm'
+          command: 'plan'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+          environmentServiceNameAzureRM: 'federated-con-1'
+
+      - task: TerraformTask@5
+        displayName: 'Terraform Show'
+        inputs:
+          provider: 'azurerm'
+          command: 'show'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+          outputTo: 'console'
+          outputFormat: 'default'
+          environmentServiceNameAzureRM: 'federated-con-1'
+
+  # ============================================================
+  # STAGE 2: SECURITY SCAN – TFSEC
+  # ============================================================
+  - job: Security_Scan_TFSEC
+    displayName: 'Security Scan | TFSEC'
+    steps:
+      - task: tfsec@1
+        inputs:
+          version: 'v1.26.0'
+          dir: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+  # ============================================================
+  # STAGE 3: CODE QUALITY – TFLINT
+  # ============================================================
+  - job: Code_Quality_TFLINT
+    displayName: 'Code Quality | TFLINT'
+    continueOnError: true
+    steps:
+      - task: PowerShell@2
+        displayName: 'Run TFLINT'
+        inputs:
+          targetType: 'inline'
+          script: |
+            winget install terraformLinters.tflint --accept-source-agreements --accept-package-agreements
+            tflint --force
+            ls
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+  # ============================================================
+  # STAGE 4: COST ANALYSIS – INFRACOST
+  # ============================================================
+  - job: Cost_Analysis_Infracost
+    displayName: 'Cost Analysis | Infracost'
+    steps:
+      - task: PowerShell@2
+        displayName: 'Run Infracost'
+        inputs:
+          targetType: 'inline'
+          script: 'infracost breakdown --path=.'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+  # ============================================================
+  # STAGE 5: POLICY & COMPLIANCE – CHECKOV
+  # ============================================================
+  - job: Policy_Compliance_Checkov
+    displayName: 'Policy & Compliance | Checkov'
+    steps:
+      - task: PowerShell@2
+        displayName: 'Run Checkov'
+        inputs:
+          targetType: 'inline'
+          script: |
+            checkov -d . --enable-secret-scan-all-files
+            checkov -d . --soft-fail
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+  # ============================================================
+  # STAGE 6: MANUAL GOVERNANCE APPROVAL
+  # ============================================================
+  - job: Manual_Governance_Approval
+    displayName: 'Governance | Manual Approval'
+    dependsOn: Terraform_Build_and_Plan
+    pool: server
+    timeoutInMinutes: 2
+    steps:
+      - task: ManualValidation@1
+        displayName: 'Await Approval'
+        inputs:
+          notifyUsers: 'pradum.dev@outlook.com'
+          instructions: 'Please review Terraform plan, security and compliance reports.'
+          onTimeout: 'resume'
+
+  # ============================================================
+  # STAGE 7: TERRAFORM APPLY (DEPLOYMENT)
+  # ============================================================
+  - job: Terraform_Apply_Deployment
+    displayName: 'Terraform | Apply Deployment'
+    dependsOn: Manual_Governance_Approval
+    condition: succeededOrFailed()
+    pool: infra-agent
+    steps:
+      - task: TerraformTask@5
+        displayName: 'Terraform Init (Apply Stage)'
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+          backendServiceArm: 'federated-con-1'
+          backendAzureRmStorageAccountName: 'devstorage12'
+          backendAzureRmContainerName: 'devcontainer'
+          backendAzureRmKey: 'dev.terraform.tfstate'
+
+      - task: TerraformTask@5
+        displayName: 'Terraform Apply'
+        inputs:
+          provider: 'azurerm'
+          command: 'apply'
+          workingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+          commandOptions: '-auto-approve'
+          environmentServiceNameAzureRM: 'federated-con-1'
